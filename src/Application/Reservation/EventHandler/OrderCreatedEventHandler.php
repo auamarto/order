@@ -9,6 +9,7 @@ use App\Application\Reservation\Exception\RequiredQtyHasNotBeenReservedException
 use App\Application\Warehouse\Command\MakeItemReservationInWarehouseCommand;
 use App\Application\Warehouse\Command\RemoveReservationFromWarehouseCommand;
 use App\Application\Warehouse\Query\GetWarehousesForItemReservationQuery;
+use App\Domain\Order\Model\Item;
 use App\Domain\Order\Model\Order;
 use App\Domain\Reservation\Model\Reservation;
 use App\Domain\Reservation\Repository\ReservationRepositoryInterface;
@@ -52,30 +53,31 @@ class OrderCreatedEventHandler
         }
         $this->logger->info("Order reservation process started", ['order' => $order->id]);
 
-        foreach ($order->getItems() as $item)
-        {
-            $chosenWarehouses = $this->getWarehousesForItemReservation($item->id, $item->qty);
-            $itemLocks = $this->createLocksForItem($chosenWarehouses);
-            $reservedQty = 0;
-            foreach ($chosenWarehouses as $itemWarehouse) {
-                try {
-                    $this->commandBus->dispatch(new MakeItemReservationInWarehouseCommand($itemWarehouse->id,$itemWarehouse->itemId, $itemWarehouse->qty));
-                    $reservedQty += $itemWarehouse->qty;
-                } catch (\RuntimeException $exception)
-                {
-                   $this->revertTransation($order, $exception, $chosenWarehouses, $itemLocks);
-                }
+
+        $chosenWarehouses = $this->getWarehousesForItemReservation($order->getItems());
+        $itemLocks = $this->createLocksForItem($chosenWarehouses);
+        $reservedQty = [];
+        foreach ($chosenWarehouses as $itemWarehouse) {
+            try {
+                $this->commandBus->dispatch(new MakeItemReservationInWarehouseCommand($itemWarehouse->id, $itemWarehouse->itemId, $itemWarehouse->qty));
+                $reservedQty[$itemWarehouse->itemId] += $itemWarehouse->qty;
+            } catch (\RuntimeException $exception) {
+                $this->revertTransation($order, $exception, $chosenWarehouses, $itemLocks);
             }
-            if ($item->qty > $reservedQty) {
+        }
+
+        foreach ($order->getItems() as $item) {
+            if (!array_key_exists($item->id, $reservedQty) || $item->qty > $reservedQty[$item->id]) {
                 $exception = new RequiredQtyHasNotBeenReservedException('Not enough qty.');
                 $this->revertTransation($order, $exception, $chosenWarehouses, $itemLocks);
 
                 throw $exception;
             }
-            $reservation = new Reservation(time(), $order, $item, $chosenWarehouses);
-            $this->reservationRepository->save($reservation);
-            $this->releaseLocks($itemLocks);
         }
+
+        $reservation = new Reservation(time(), $order, $item, $chosenWarehouses);
+        $this->reservationRepository->save($reservation);
+        $this->releaseLocks($itemLocks);
 
         $this->logger->info("Order reservation has been processed", ['order' => $order->id]);
         $this->eventBus->dispatch(new ReservationHasBeenMadeEvent($order->id));
@@ -101,11 +103,13 @@ class OrderCreatedEventHandler
     }
 
     /**
+     * @param Item[] $items
+     *
      * @return ItemWarehouse[]
      */
-    private function getWarehousesForItemReservation(int $itemId, int $qty): array
+    private function getWarehousesForItemReservation(array $items): array
     {
-        return $this->handle(new GetWarehousesForItemReservationQuery($itemId, $qty));
+        return $this->handle(new GetWarehousesForItemReservationQuery($items));
     }
 
     /**

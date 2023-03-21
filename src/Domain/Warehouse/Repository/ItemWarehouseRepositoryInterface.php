@@ -13,7 +13,7 @@ interface ItemWarehouseRepositoryInterface
      *
      * @return ItemWarehouse[]
      */
-    public function getWarehousesForItem(int $itemId, $qty): array;
+    public function getWarehousesForItem(int $itemId, int $qty): array;
 
     /**
      * @throws ItemReservationFailed
@@ -21,4 +21,9 @@ interface ItemWarehouseRepositoryInterface
     public function makeReservation(int $warehouseId, int $itemId, int $qty): void;
 
     public function removeReservation(int $warehouseId, int $itemId): void;
+
+    /**
+     *  @return ItemWarehouse[]
+     */
+    public function getFromInvolvedWhs(int $itemId, int $qty, array $whs): array;
 }
